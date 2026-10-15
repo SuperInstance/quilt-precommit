@@ -22,10 +22,14 @@ if [ -z "$DOCTOR" ] || [ ! -x "$DOCTOR" ]; then
     exit 2
 fi
 
-# Get the list of staged record.json files
-STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep 'record\.json$' || true)
+# Get the list of staged record files. We support two patterns:
+#   1. Files literally named "record.json" (a single big record set)
+#   2. Any *.json file inside a "records/" or "record/" directory
+STAGED_RECORD_JSON=$(git diff --cached --name-only --diff-filter=ACM | grep '/record\.json$' || true)
+STAGED_RECORDS_DIR=$(git diff --cached --name-only --diff-filter=ACM | grep -E "^(records|record)/[^/]+\.json$" || true)
+STAGED=$(printf "%s\n%s\n" "$STAGED_RECORD_JSON" "$STAGED_RECORDS_DIR" | grep -v '^$' || true)
 if [ -z "$STAGED" ]; then
-    # No record.json files staged; nothing to do
+    # No record files staged; nothing to do
     exit 0
 fi
 
