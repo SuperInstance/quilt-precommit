@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# quilt-precommit — git pre-commit hook for git.pp record.json files
+#
+# Validates every staged record.json against the git.pp spec via
+# git.pp-doctor. Blocks the commit if any record fails.
+
+set -e
+
+# Locate the doctor (look in PATH, then the local hook directory)
+DOCTOR=$(command -v git.pp-doctor 2>/dev/null || echo "")
+if [ -z "$DOCTOR" ]; then
+    # Try the local hook directory
+    HOOK_DIR="$(dirname "$(readlink -f "$0")")"
+    if [ -x "$HOOK_DIR/git.pp-doctor" ]; then
+        DOCTOR="$HOOK_DIR/git.pp-doctor"
+    fi
+fi
+
+if [ -z "$DOCTOR" ] || [ ! -x "$DOCTOR" ]; then
+    echo "quilt-precommit: git.pp-doctor not found in PATH or in $HOOK_DIR"
+    echo "  install: pip install gitpp-doctor (or clone SuperInstance/git.pp-doctor)"
+    exit 2
+fi
+
+# Get the list of staged record.json files
+STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep 'record\.json$' || true)
+if [ -z "$STAGED" ]; then
+    # No record.json files staged; nothing to do
+    exit 0
+fi
+
+# Aggregate the records into a single set for closure checks
+TMPDIR=$(mktemp -d)
+trap "rm -rf $TMPDIR" EXIT
+
+AGGREGATE="$TMPDIR/records.json"
+echo "[" > "$AGGREGATE"
+FIRST=1
+for f in $STAGED; do
+    if [ $FIRST -eq 0 ]; then
+        echo "," >> "$AGGREGATE"
+    fi
+    FIRST=0
+    cat "$f" >> "$AGGREGATE"
+done
+echo "]" >> "$AGGREGATE"
+
+# Check each record.json file individually for structural issues
+FAIL=0
+for f in $STAGED; do
+    echo -n "checking $f ... "
+    if ! "$DOCTOR" check "$f" > /dev/null 2>&1; then
+        echo "FAIL"
+        "$DOCTOR" check "$f"
+        FAIL=1
+    else
+        echo "ok"
+    fi
+done
+
+if [ $FAIL -eq 1 ]; then
+    echo
+    echo "quilt-precommit: commit blocked. To skip, use 'git commit --no-verify'."
+    exit 1
+fi
+
+# Check the aggregate for closure completeness
+echo -n "checking aggregate closure ... "
+if ! "$DOCTOR" fold --input "$AGGREGATE" --quiet > /dev/null 2>&1; then
+    echo "WARN"
+    echo "  (closure may be incomplete; this is OK if some parents are in the pinned set)"
+    echo "  (this warning is non-blocking; use 'git commit --no-verify' to skip the WARN check too)"
+fi
+
+exit 0
